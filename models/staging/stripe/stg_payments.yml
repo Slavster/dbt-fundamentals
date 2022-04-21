@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: stg_payments
+    description: One unique payment per row
+    columns:
+      - name: payment_id
+        description: Primary key for stg_payments
+        tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: Foreign key for stg_orders
+      - name: amount
+        description: Amount the customer paid in USD
+      - name: created_at
+        description: Date of the payment in UTC
