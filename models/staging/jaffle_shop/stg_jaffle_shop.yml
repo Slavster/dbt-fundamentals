@@ -12,6 +12,7 @@ models:
   - name: stg_orders
     columns:
       - name: order_id
+        description: One unique order per row
         tests:
           - unique
           - not_null
