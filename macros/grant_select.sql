@@ -1,4 +1,4 @@
-{% macro grant_select(schema = target.schema, role = target.role) %}
+{% macro grant_select(schema = target.dataset, role = 'roles/bigquery.dataViewer') %}
     
     {% set query %}
         grant usage on schema {{ schema }} to role {{ role }}
