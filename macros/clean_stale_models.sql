@@ -1,38 +1,66 @@
-{#  
-    -- let's develop a macro that 
-    1. queries the information schema of a database
-    2. finds objects that are > 1 week old (no longer maintained)
-    3. generates automated drop statements
-    4. has the ability to execute those drop statements
+-- Removes tables and views from the given run configuration
+-- Usage in production:
+--    dbt run-operation cleanup_dataset
+-- To only see the commands that it is about to perform:
+--    dbt run-operation cleanup_dataset --args '{"dry_run": True}'
+{% macro cleanup_dataset(dry_run=True) %}
+    {% if execute %}
+        {% set current_model_locations={} %}
 
-#}
+        {% for node in graph.nodes.values() | selectattr("resource_type", "in", ["model", "seed", "snapshot"])%}
+            {% if not node.database in current_model_locations %}
+                {% do current_model_locations.update({node.database: {}}) %}
+            {% endif %}
+            {% if not node.schema in current_model_locations[node.database] %}
+                {% do current_model_locations[node.database].update({node.schema: []}) %}
+            {% endif %}
+            {% set table_name = node.alias if node.alias else node.name %}
+            {% do current_model_locations[node.database][node.schema].append(table_name) %}
+        {% endfor %}
+    {% endif %}
 
-{% macro clean_stale_models(database=target.name, schema=target.dataset, days=7, dry_run=True) %}
-    
-    {% set get_drop_commands_query %}
-        select
-            case 
-                when table_type = 'VIEW'
-                    then table_type
-                else 
-                    'TABLE'
-            end as drop_type, 
-            'DROP ' || drop_type || ' {{ database | upper }}.' || table_schema || '.' || table_name || ';'
-        from {{ database }}.information_schema.tables 
-        where table_schema = upper('{{ schema }}')
-        and last_altered <= current_date() - {{ days }} 
+    {% set cleanup_query %}
+
+        with models_to_drop as (
+            {% for database in current_model_locations.keys() %}
+                {% if loop.index > 1 %}union all{% endif %}
+                {% for dataset, tables  in current_model_locations[database].items() %}
+                    {% if loop.index > 1 %}union all{% endif %}
+                    select
+                        table_type,
+                        table_catalog,
+                        table_schema,
+                        table_name,
+                        case
+                            when table_type = 'BASE TABLE' then 'TABLE'
+                            when table_type = 'VIEW' then 'VIEW'
+                        end as relation_type,
+                        array_to_string([table_catalog, table_schema, table_name], '.') as relation_name
+                    from {{ dataset }}.INFORMATION_SCHEMA.TABLES
+                    where not (table_name in ('{{ "', '".join(tables) }}'))
+                {% endfor %}
+            {% endfor %}
+        ),
+        drop_commands as (
+            select 'drop ' || relation_type || ' `' || relation_name || '`;' as command
+            from models_to_drop
+        )
+
+        select command
+        from drop_commands
+        -- intentionally exclude unhandled table_types, including 'external table`
+        where command is not null
+
     {% endset %}
-
-    {{ log('\nGenerating cleanup queries...\n', info=True) }}
-    {% set drop_queries = run_query(get_drop_commands_query).columns[1].values() %}
-
-    {% for query in drop_queries %}
-        {% if dry_run %}
-            {{ log(query, info=True) }}
-        {% else %}
-            {{ log('Dropping object with command: ' ~ query, info=True) }}
-            {% do run_query(query) %} 
-        {% endif %}       
-    {% endfor %}
-    
-{% endmacro %} 
+    {% set drop_commands = run_query(cleanup_query).columns[0].values() %}
+    {% if drop_commands %}
+        {% for drop_command in drop_commands %}
+            {% do log(drop_command, True) %}
+            {% if dry_run | as_bool == False %}
+                {% do run_query(drop_command) %}
+            {% endif %}
+        {% endfor %}
+    {% else %}
+        {% do log('No relations to clean.', True) %}
+    {% endif %}
+{%- endmacro -%}
