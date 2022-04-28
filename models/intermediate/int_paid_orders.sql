@@ -38,22 +38,18 @@ paid_orders as (
 
 ),
 
-order_clv as (
+order_clv_add as (
 
     select
-        p.order_id,
-        sum(t2.total_amount_paid) as clv_bad
+        * ,
+        sum(total_amount_paid) over(
+            partition by customer_id
+            order by order_placed_at
+        ) as customer_lifetime_value
     from paid_orders as p
-    left join 
-        paid_orders t2 on p.customer_id = t2.customer_id
-        and p.order_id >= t2.order_id
-    group by 1
-    order by p.order_id
 
 )
 
 select
-    po.*,
-    oclv.clv_bad as customer_lifetime_value
-from paid_orders as po
-join order_clv as oclv using (order_id)
+    *
+from order_clv_add
